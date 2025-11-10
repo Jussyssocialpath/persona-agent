@@ -1,0 +1,48 @@
+openapi: 3.1.0
+info:
+  title: Persona Research Agent API
+  version: "1.0.0"
+servers:
+  - url: https://persona-agent-zm61.onrender.com
+paths:
+  /ideas:
+    post:
+      operationId: ideas
+      summary: Generiert Content-Ideen aus Reddit-Funden passend zur Persona
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                persona:
+                  type: object
+                  required: [name, description]
+                  properties:
+                    name: { type: string }
+                    description: { type: string }
+                    industry: { type: string }
+                    stage: { type: string, enum: [Awareness, Consideration, Decision] }
+                    language: { type: string, default: de }
+                topic: { type: string }
+                subreddits:
+                  type: array
+                  items: { type: string }
+                time_range:
+                  type: string
+                  enum: [day, week, month, year, all]
+                limit: { type: integer, default: 10 }
+              required: [persona, topic]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ideas: { type: string }
+                  sources:
+                    type: array
+                    items: { type: string }
