@@ -1,5 +1,6 @@
 Flask==3.0.3
 praw==7.7.1
-openai>=1.40.0
+openai==1.40.2
 gunicorn==21.2.0
+
 
