@@ -2,19 +2,25 @@ import os, json
 from typing import List
 from flask import Flask, request, jsonify
 import praw
-from openai import OpenAI
+import requests # Added requests for direct OpenAI API call
 
-oai = OpenAI()
+# The system's OPENAI_API_KEY will be used from the environment.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Reddit API Credentials (will be loaded from environment variables)
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
 REDDIT_SECRET = os.getenv("REDDIT_SECRET")
 REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "PersonaResearcher/1.0")
 
-reddit = praw.Reddit(
-    client_id=REDDIT_CLIENT_ID,
-    client_secret=REDDIT_SECRET,
-    user_agent=REDDIT_USER_AGENT,
-)
+# Initialize PRAW client globally
+reddit = None
+if REDDIT_CLIENT_ID and REDDIT_SECRET:
+    # Using script mode for unauthenticated access (Client ID + Secret)
+    reddit = praw.Reddit(
+        client_id=REDDIT_CLIENT_ID,
+        client_secret=REDDIT_SECRET,
+        user_agent=REDDIT_USER_AGENT,
+    )
 
 app = Flask(__name__)
 
@@ -38,14 +44,23 @@ def _normalize_body(data: dict):
     return persona_obj, topic, subs, timeframe, limit
 
 def _fetch_reddit_posts(topic: str, subs: List[str], timeframe: str, limit: int):
+    if not reddit:
+        return [], "Reddit API client not initialized. Check REDDIT_CLIENT_ID and REDDIT_SECRET environment variables."
+
     posts = []
     try:
         target = "+".join(subs) if subs else "all"
         sr = reddit.subreddit(target)
+        
+        # PRAW uses 't' for time_filter
+        time_filter_map = {"hour": "hour", "day": "day", "week": "week", "month": "month", "year": "year", "all": "all"}
+        time_filter = time_filter_map.get(timeframe.lower(), "month")
+
         if topic:
-            results = sr.search(query=topic, time_filter=timeframe, sort="relevance", limit=limit)
+            results = sr.search(query=topic, time_filter=time_filter, sort="relevance", limit=limit)
         else:
-            results = sr.top(timeframe, limit=limit)
+            results = sr.top(time_filter, limit=limit)
+            
         for s in results:
             posts.append({
                 "title": s.title,
@@ -65,6 +80,7 @@ def ideas():
     posts, err = _fetch_reddit_posts(topic, subs, timeframe, limit)
     if err is not None:
         return jsonify({"error": f"Reddit API error: {err}"}), 403
+    
     sys = (
         "Du bist ein Research- und Content-Strategie-Agent. "
         "Erzeuge präzise, umsetzbare Content-Ideen (Titel, Hook, Angle, Format) "
@@ -77,18 +93,34 @@ def ideas():
         f"Reddit-Quellen (max {len(posts)}): {json.dumps(posts, ensure_ascii=False)}\n"
         "Erzeuge 5 Ideen. Zeige am Ende eine Liste der verwendeten Quellen-URLs."
     )
-    resp = oai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "system", "content": sys},
-                  {"role": "user", "content": usr}],
-        temperature=0.7,
-    )
-    text = resp.choices[0].message.content
+    
+    if not OPENAI_API_KEY:
+        return jsonify({"error": "OPENAI_API_KEY environment variable not set."}), 500
+
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+    payload = {
+        "model": "gpt-4.1-mini", # Using a system-guaranteed model
+        "messages": [{"role": "system", "content": sys},
+                     {"role": "user", "content": usr}],
+        "temperature": 0.7,
+    }
+    
+    try:
+        resp = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers, timeout=120.0)
+        resp.raise_for_status()
+        data = resp.json()
+        text = data["choices"][0]["message"]["content"]
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"OpenAI API request failed: {e}"}), 500
+        
     return jsonify({
         "ideas": text,
         "sources": [p["url"] for p in posts]
     })
 
 if __name__ == "__main__":
+    # Setting default port to 8080 to match the redirect URI in the screenshot
+    port = int(os.getenv("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port)
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
